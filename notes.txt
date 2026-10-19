@@ -1,0 +1,16 @@
+Matthew (2016): 12,829 Chatham applications
+Irma (2017): 22,763 Chatham applications
+Debby (2024): 3,866 Chatham applications
+Helene (2024): 34,184 Chatham applications
+
+Fields available: ['accessFunctionalNeeds', 'applicantAge', 'appliedDate', 'autoDamage', 'censusGeoid', 'censusYear', 'county', 'currentLocation', 'damagedCity', 'damagedStateAbbreviation', 'damagedZipCode', 'declarationDate', 'destroyed', 'disasterNumber', 'emergencyNeeds', 'fipAmount', 'fips', 'floodDamage', 'floodDamageAmount', 'floodInsurance', 'foodNeed', 'foundationDamage', 'foundationDamageAmount', 'grossIncome', 'haAmount', 'haEligible', 'haMax', 'haReferral', 'haStatus', 'habitabilityRepairsRequired', 'highWaterLocation', 'homeDamage', 'homeOwnersInsurance', 'householdComposition', 'id', 'ihpAmount', 'ihpEligible', 'ihpMax', 'ihpReferral', 'incidentTypeCode', 'ineligibleInsurance', 'ineligibleReason', 'inspnIssued', 'inspnReturned', 'insufficientDamage', 'lastRefresh', 'occupants19to64', 'occupants2to5', 'occupants65andOver', 'occupants6to18', 'occupantsUnderTwo', 'onaAmount', 'onaDentalAssistAmount', 'onaDentalAssistEligible', 'onaEligible', 'onaFuneralAssistAmount', 'onaFuneralAssistEligible', 'onaMax', 'onaMedicalAssistAmount', 'onaMedicalAssistEligible', 'onaMovingAssistAmount', 'onaMovingAssistEligible', 'onaOtherAssistAmount', 'onaOtherAssistEligible', 'onaReferral', 'ownRent', 'personalPropertyAmount', 'personalPropertyEligible', 'ppfvl', 'primaryResidence', 'registrationMethod', 'rentalAssistanceAmount', 'rentalAssistanceEligible', 'rentalAssistanceEndDate', 'rentalResourceCity', 'rentalResourceStateAbbrev', 'rentalResourceZipCode', 'renterDamageLevel', 'repairAmount', 'repairAssistanceEligible', 'replacementAmount', 'replacementAssistanceEligible', 'reportedDamage', 'residenceType', 'roofDamage', 'roofDamageAmount', 'rpfvl', 'sbaApproved', 'selfAssessmentInformation', 'shelterNeed', 'storm', 'transientAccommodAmount', 'transientAccommodEligible', 'tsaCheckedIn', 'tsaEligible', 'unmetNeedPp', 'unmetNeedRp', 'utilitiesOut', 'verifiedOccupancy', 'verifiedOwnership', 'waterLevel']
+
+=== Flood-damaged homeowners, Chatham County ===
+Empty DataFrame
+Columns: [flooded_owners, insured, uninsured, pct_uninsured]
+Index: []
+
+Top ZIPs by uninsured flooded owners:
+Empty DataFrame
+Columns: [storm, damagedZipCode, flooded_owners, insured, uninsured, pct_uninsured]
+Index: []
