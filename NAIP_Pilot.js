@@ -41,18 +41,25 @@ var tilesOld = tilesFor(YEAR_OLD);
 var tilesNew = tilesFor(YEAR_NEW);
 
 // Season check (run once, then you can comment these out)
-print('Acquisition dates ' + YEAR_OLD + ':',
-      tilesOld.aggregate_array('system:time_start')
-        .map(function (t) { return ee.Date(t).format('YYYY-MM-dd'); }).distinct());
-print('Acquisition dates ' + YEAR_NEW + ':',
-      tilesNew.aggregate_array('system:time_start')
-        .map(function (t) { return ee.Date(t).format('YYYY-MM-dd'); }).distinct());
+// print('Acquisition dates ' + YEAR_OLD + ':',
+//       tilesOld.aggregate_array('system:time_start')
+//         .map(function (t) { return ee.Date(t).format('YYYY-MM-dd'); }).distinct());
+// print('Acquisition dates ' + YEAR_NEW + ':',
+//       tilesNew.aggregate_array('system:time_start')
+//         .map(function (t) { return ee.Date(t).format('YYYY-MM-dd'); }).distinct());
 
 var rgb = {bands: ['R', 'G', 'B'], min: 0, max: 255};
 
 // ---------- RAW layers (reference) ----------
-Map.addLayer(tilesOld.mosaic(), rgb, 'RAW ' + YEAR_OLD, false);
-Map.addLayer(tilesNew.mosaic(), rgb, 'RAW ' + YEAR_NEW, false);
+// Map.addLayer(tilesOld.mosaic(), rgb, 'RAW ' + YEAR_OLD, false);
+// Map.addLayer(tilesNew.mosaic(), rgb, 'RAW ' + YEAR_NEW, false);
+
+// ---------- County-wide viewing layers (for placing training points) ----------
+function countyView(year) {
+  return naip.filter(ee.Filter.calendarRange(year, year, 'year')).mosaic();
+}
+Map.addLayer(countyView(YEAR_OLD), rgb, 'VIEW ' + YEAR_OLD + ' (county)', false);
+Map.addLayer(countyView(YEAR_NEW), rgb, 'VIEW ' + YEAR_NEW + ' (county)', false);
 
 // ---------- Processed imagery ----------
 function naipYear(tiles) {
@@ -113,7 +120,7 @@ if (RUN_PILOT) {
   // --- Layers ---
   Map.addLayer(impOld.selfMask(), {palette: ['808080']}, 'Impervious ' + YEAR_OLD, false);
   Map.addLayer(impNew.selfMask(), {palette: ['404040']}, 'Impervious ' + YEAR_NEW, false);
-  Map.addLayer(shadow.selfMask(), {palette: ['aa00ff']}, 'Shadow mask (purple)', false);
+  // Map.addLayer(shadow.selfMask(), {palette: ['aa00ff']}, 'Shadow mask (purple)', false);
   Map.addLayer(newImp, {palette: ['ff0000']}, 'New impervious (red)');
   Map.addLayer(lostImp, {palette: ['00aaff']}, 'Lost impervious (blue)');
 
@@ -139,3 +146,9 @@ if (RUN_PILOT) {
   print('New impervious area in pilot (m2; divide by 4,047 for acres):', areaOver(new01, pilot));
   print('Lost impervious area in pilot (m2):', areaOver(lost01, pilot));
 }
+
+// Export.table.toAsset({
+//   collection: impervious.merge(pervious),
+//   description: 'training_points_backup',
+//   assetId: 'projects/YOUR-CLOUD-PROJECT/assets/cear/training_points_backup'
+// });
