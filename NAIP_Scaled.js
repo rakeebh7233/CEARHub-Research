@@ -1,67 +1,62 @@
 // ============================================================
-// NAIP impervious change - SCALE-UP (v5) - west Chatham corridor
-// Gross NEW impervious only, 2013 vs 2023 (lost impervious not analyzed).
+// NAIP impervious change - v6 (map version v3) - west Chatham corridor
+// v6 = 3 classes per year (0 vegetation/water, 1 impervious, 2 bare/cleared),
+//      separate bare-ground training points per year, a texture band
+//      (pavement is smooth, dirt and dry grass are mottled), and an EVAL mode
+//      that scores the new map against the EXISTING 325 labeled points.
 //
-// Drawn imports needed at the top of the Code Editor:
-//   studyArea  (polygon)          - west Chatham corridor (Pooler, Port Wentworth,
-//                                   Garden City, Bloomingdale + the unincorporated
-//                                   land between them). Clipped to the county below.
-//   impervious (points, class = 1)
-//   pervious   (points, class = 0)
-//   stable     (polygons)         - areas you know did not change
+// Drawn imports needed (set each one's type to FeatureCollection with the gear icon):
+//   studyArea  (polygon)
+//   impervious (points)  - impervious in BOTH years        -> class 1
+//   pervious   (points)  - vegetation/water in BOTH years  -> class 0
+//   bare13     (points)  - bare/cleared ground in 2013     -> class 2 (2013 model only)
+//   bare23     (points)  - bare/cleared ground in 2023     -> class 2 (2023 model only)
+//   stable     (polygons) - areas you know did not change
+//   exclude    (polygons) - disposal area, mine pit
+// Class values are set by the script, so the 'class' property on the imports
+// doesn't matter.
 //
-// Uploaded asset needed from MODE 'SAMPLE' on:
-//   NWI wetlands for Chatham (shapefile upload -> table asset)
-//
-// RUN ORDER (change MODE each time, then press Run):
-//   1. 'CHECK'  - point counts, acquisition dates, out-of-bag error, preview.
-//   2. 'EXPORT' - start the Tasks-tab export of the change map to an Asset.
-//                 Wait for it to finish (can take an hour or more).
-//   3. 'SAMPLE' - water/marsh mask, area stats, and the random accuracy sample
-//                 (three more Tasks: stats CSV, labeling CSV + key, points asset).
-//   4. 'LABEL'  - side-by-side 2013/2023 viewer that steps through the
-//                 accuracy points so you can hand-label them.
-// If you change training points after step 2, redo steps 2-4.
+// RUN ORDER:
+//   1. 'CHECK'  - counts, out-of-bag error, 3-class cross-validation, preview.
+//   2. 'EXPORT' - change map to Asset (v3). Wait for it to finish.
+//   3. 'VIEW'   - browse v3 (fast).
+//   4. 'EVAL'   - two Tasks: eval_v3_west (map values at your 325 labeled points)
+//                 and stats_v3_west (v3 areas). Then run accuracy_v3.py.
+//   'LABEL'     - same 2013/2023 viewer as before (jump to any accuracy point id).
+// Do NOT rerun the old SAMPLE mode: your labels belong to the existing sample.
 // ============================================================
 
-// ---------- SETTINGS (edit these) ----------
-var MODE = 'CHECK';          // 'CHECK' | 'EXPORT' | 'SAMPLE' | 'LABEL'
+// ---------- SETTINGS ----------
+var MODE = 'CHECK';          // 'CHECK' | 'EXPORT' | 'VIEW' | 'EVAL' | 'LABEL'
+var SHOW_DIAGNOSTICS = true; // CHECK mode: April tiles + cross-validation (slow)
 
 var YEAR_OLD = 2013;
 var YEAR_NEW = 2023;
 var SHADOW_MAX = 60;         // mean R,G,B below this = shadow (either year)
-var MIN_PATCH = 50;          // drop new-impervious patches smaller than this (pixels = m2)
-var CRS = 'EPSG:26917';      // UTM 17N, all measurements on a 1 m grid
+var MIN_PATCH = 50;          // drop new patches smaller than this (m2)
+var TEX_RADIUS = 2;          // texture window = (2*2+1) = 5 x 5 m
+var CRS = 'EPSG:26917';
 
-// Your Earth Engine asset folder (create it in the Assets tab first)
-var ASSET_ROOT   = 'projects/YOUR-CLOUD-PROJECT/assets/cear';
-var CHANGE_ASSET = ASSET_ROOT + '/naip_change_west_2013_2023';
-var SAMPLE_ASSET = ASSET_ROOT + '/accuracy_points_west';
+var ASSET_ROOT   = 'projects/cearhub/assets';
+var CHANGE_ASSET = ASSET_ROOT + '/naip_change_west_2013_2023_v3';
+var SAMPLE_ASSET = ASSET_ROOT + '/accuracy_points_west';   // existing labeled sample
 var NWI_ASSET    = ASSET_ROOT + '/nwi_chatham';
-var NWI_FIELD    = 'ATTRIBUTE';  // NWI code field, e.g. 'E2EM1P'. Check with print(nwi.first()).
+var NWI_FIELD    = 'ATTRIBUTE';
 
-// Tidal mask. Masks ONLY estuarine/marine (E*, M*) and tidal riverine (R1*).
-// Freshwater wetlands, ponds and lakes stay IN (a filled pond is real new pavement).
 var USE_TIDAL_MASK = true;
-// Also mask tidal FRESHWATER marsh (palustrine with tidal water regime R/S/T/V).
-// Relevant along the Savannah River by Port Wentworth (old rice-field marshes).
 var MASK_TIDAL_FRESHWATER = true;
 
-// Accuracy sample: points per stratum
-//   1 = mapped NEW impervious
-//   2 = impervious in 2023 but NOT mapped new (catches 2013 mistakes and
-//       patches removed by the small-patch cleanup)
-//   3 = not impervious in 2023, within ~30-60 m of mapped new (missed edges)
-//   4 = everything else
-var SAMPLE_SIZES = [100, 50, 75, 100];
-var SEED = 2026;
+// Class colors: 0 vegetation/water, 1 impervious, 2 bare
+var CLASS_VIS = {min: 0, max: 2, palette: ['33aa33', '404040', 'e0c080']};
 
-// ---------- COMMON: study area and imagery ----------
+// ---------- STUDY AREA AND IMAGERY ----------
 var chatham = ee.FeatureCollection('TIGER/2018/Counties')
   .filter(ee.Filter.and(ee.Filter.eq('STATEFP', '13'),
                         ee.Filter.eq('NAME', 'Chatham')));
-var region = ee.FeatureCollection(studyArea).geometry()
-  .intersection(chatham.geometry(), ee.ErrorMargin(1));
+var region = ee.Geometry(ee.FeatureCollection(studyArea).geometry()
+  .intersection(chatham.geometry(), ee.ErrorMargin(1))
+  .difference(ee.FeatureCollection(exclude).geometry(), ee.ErrorMargin(1))
+  .getInfo());
 
 var naip = ee.ImageCollection('USDA/NAIP/DOQQ').filterBounds(region);
 var rgb = {bands: ['R', 'G', 'B'], min: 0, max: 255};
@@ -69,35 +64,72 @@ var rgb = {bands: ['R', 'G', 'B'], min: 0, max: 255};
 function tilesFor(year) {
   return naip.filter(ee.Filter.calendarRange(year, year, 'year'));
 }
-function prep(year) {
-  var img = tilesFor(year).mosaic().clip(region);
-  var ndvi = img.normalizedDifference(['N', 'R']).rename('NDVI');
-  return img.select(['R', 'G', 'B', 'N']).addBands(ndvi);
+function clipIfExport(img) {
+  return MODE === 'EXPORT' ? img.clip(region) : img;
 }
 
-// Only points inside the study area are used.
-var training = impervious.merge(pervious).filterBounds(region);
+function addStatic(fc, vis, name, shown) {
+  fc.map(function (f) {
+    return f.setGeometry(f.geometry().transform('EPSG:4326', 0.1));
+  }).evaluate(function (geo, err) {
+    if (err) { print('Layer "' + name + '" failed:', err); return; }
+    var feats = geo.features.map(function (f) {
+      return ee.Feature(ee.Geometry(f.geometry), f.properties);
+    });
+    Map.addLayer(ee.FeatureCollection(feats), vis, name, shown);
+  });
+}
 
-// One random forest per year, each trained on THAT year's pixel values
-// at the same points (so camera/brightness differences between years are
-// mostly absorbed).
-function trainRF(img) {
+// Bands: R, G, B, N, NDVI, NDWI, TEX.
+// TEX = standard deviation of brightness in a 5 x 5 m window, computed on a fixed
+// 1 m grid so the window is the same size in both years (2013 and 2023 NAIP have
+// different native pixel sizes). Because of that fixed grid, live map layers that
+// use the classifier only work zoomed in (~16+).
+function prep(year) {
+  var img = clipIfExport(tilesFor(year).mosaic());
+  var ndvi = img.normalizedDifference(['N', 'R']).rename('NDVI');
+  var ndwi = img.normalizedDifference(['G', 'N']).rename('NDWI');
+  var bright = img.select(['R', 'G', 'B']).reduce(ee.Reducer.mean())
+    .reproject({crs: CRS, scale: 1});
+  var tex = bright.reduceNeighborhood({
+    reducer: ee.Reducer.stdDev(),
+    kernel: ee.Kernel.square(TEX_RADIUS, 'pixels')
+  }).rename('TEX');
+  return img.select(['R', 'G', 'B', 'N']).addBands(ndvi).addBands(ndwi).addBands(tex);
+}
+
+// ---------- TRAINING DATA ----------
+function asClass(fc, c) {
+  return ee.FeatureCollection(fc).map(function (f) { return f.set('class', c); });
+}
+var impPts  = asClass(impervious, 1);
+var pervPts = asClass(pervious, 0);
+// Each year's model gets the both-years points plus that year's bare points.
+var training13 = impPts.merge(pervPts).merge(asClass(bare13, 2)).filterBounds(region);
+var training23 = impPts.merge(pervPts).merge(asClass(bare23, 2)).filterBounds(region);
+
+function trainRF(img, coll) {
   var samples = img.sampleRegions({
-    collection: training, properties: ['class'], scale: 1, projection: CRS
+    collection: coll, properties: ['class'], scale: 1, projection: CRS
   });
   var rf = ee.Classifier.smileRandomForest(100)
     .train(samples, 'class', img.bandNames());
   return {samples: samples, rf: rf};
 }
 
+function cleanPatches(mask) {
+  var m = mask.reproject({crs: CRS, scale: 1}).selfMask();
+  return m.updateMask(m.connectedPixelCount(MIN_PATCH, true).gte(MIN_PATCH));
+}
+
 function buildChange() {
   var imgOld = prep(YEAR_OLD);
   var imgNew = prep(YEAR_NEW);
-  var tOld = trainRF(imgOld);
-  var tNew = trainRF(imgNew);
+  var tOld = trainRF(imgOld, training13);
+  var tNew = trainRF(imgNew, training23);
 
-  var impOld = imgOld.classify(tOld.rf).rename('imp2013');
-  var impNew = imgNew.classify(tNew.rf).rename('imp2023');
+  var c13 = imgOld.classify(tOld.rf).rename('cls2013');
+  var c23 = imgNew.classify(tNew.rf).rename('cls2023');
 
   function brightness(img) {
     return img.select(['R', 'G', 'B']).reduce(ee.Reducer.mean());
@@ -105,28 +137,35 @@ function buildChange() {
   var shadow = brightness(imgOld).lt(SHADOW_MAX)
     .or(brightness(imgNew).lt(SHADOW_MAX)).rename('shadow');
 
-  var newRaw = impNew.eq(1).and(impOld.eq(0)).and(shadow.not());
-  var m = newRaw.reproject({crs: CRS, scale: 1}).selfMask();
-  var newClean = m.updateMask(m.connectedPixelCount(MIN_PATCH, true).gte(MIN_PATCH));
+  // New impervious: impervious in 2023, NOT impervious in 2013 (2013 may be
+  // vegetation OR bare - bare in 2013 then paved by 2023 counts as new).
+  var newImp = cleanPatches(c23.eq(1).and(c13.neq(1)).and(shadow.not()));
+  // New bare/cleared: bare in 2023, vegetation/water in 2013.
+  var newBare = cleanPatches(c23.eq(2).and(c13.eq(0)).and(shadow.not()));
 
-  // Only keep pixels where both years have imagery
   var dataMask = imgOld.select('R').mask().and(imgNew.select('R').mask());
 
-  var out = ee.Image.cat([
-    impOld, impNew, shadow, newClean.unmask(0).rename('new')
-  ]).toByte().updateMask(dataMask).clip(region);
+  var out = clipIfExport(ee.Image.cat([
+    c13.eq(1).rename('imp2013'),
+    c23.eq(1).rename('imp2023'),
+    shadow,
+    newImp.unmask(0).rename('new'),
+    newBare.unmask(0).rename('newBare'),
+    c13, c23
+  ]).toByte().updateMask(dataMask));
 
   return {out: out, imgOld: imgOld, imgNew: imgNew, tOld: tOld, tNew: tNew};
 }
 
-// Tidal mask image: keep = 1 outside tidal NWI polygons, 0 inside.
+// Tidal mask (corrected regex for mixed classes like PFO1/4R, PSS1/2T).
 function tidalKeep() {
   if (!USE_TIDAL_MASK) return {keep: ee.Image(1), tidal: null};
   var nwi = ee.FeatureCollection(NWI_ASSET).filterBounds(region);
   var flagged = nwi.map(function (f) {
-    var a = ee.String(f.get(NWI_FIELD));
+    var a = ee.String(ee.Algorithms.If(f.get(NWI_FIELD), f.get(NWI_FIELD), ''));
     var estMar = a.match('^(E|M|R1)').length().gt(0);
-    var tidalFresh = a.match('^P[A-Z]{2}[0-9]*(/[A-Z]{2}[0-9]*)?[RSTV]').length().gt(0);
+    var tidalFresh = a.match('^P[A-Z]{2}[0-9]*(/([A-Z]{2}[0-9]*|[0-9]+))?[RSTV]')
+      .length().gt(0);
     var flag = MASK_TIDAL_FRESHWATER ? estMar.or(tidalFresh) : estMar;
     return f.set('tidal', flag);
   });
@@ -136,176 +175,129 @@ function tidalKeep() {
 }
 
 // ============================================================
-// MODE: CHECK - run this until the numbers look right, then EXPORT
+// MODE: CHECK
 // ============================================================
 if (MODE === 'CHECK') {
   var b = buildChange();
 
   print('Study area (km2):', region.area(1).divide(1e6));
-  print('Training points inside study area, by class (0 = pervious, 1 = impervious):',
-        training.aggregate_histogram('class'));
-  // print('Samples actually used ' + YEAR_OLD + ' (points lost to missing imagery drop out):',
-  //       b.tOld.samples.aggregate_histogram('class'));
-  // print('Samples actually used ' + YEAR_NEW + ':',
-  //       b.tNew.samples.aggregate_histogram('class'));
-  print('Out-of-bag error ' + YEAR_OLD + ' (share of training points the forest gets wrong; want < ~0.05):',
-        b.tOld.rf.explain().get('outOfBagErrorEstimate'));
-  print('Out-of-bag error ' + YEAR_NEW + ':',
-        b.tNew.rf.explain().get('outOfBagErrorEstimate'));
-
-  function dates(year) {
-    return tilesFor(year).aggregate_array('system:time_start')
-      .map(function (t) { return ee.Date(t).format('YYYY-MM-dd'); }).distinct();
-  }
-  print('Acquisition dates over study area, ' + YEAR_OLD + ':', dates(YEAR_OLD));
-  print('Acquisition dates over study area, ' + YEAR_NEW + ':', dates(YEAR_NEW));
+  print('2013 training points by class (0 veg/water, 1 impervious, 2 bare):',
+        training13.aggregate_histogram('class'));
+  print('2023 training points by class:', training23.aggregate_histogram('class'));
+  print('If class 2 shows 1 instead of ~40 / ~60, set bare13/bare23 import type to FeatureCollection.');
+  print('Out-of-bag error ' + YEAR_OLD + ':', b.tOld.rf.explain().get('outOfBagErrorEstimate'));
+  print('Out-of-bag error ' + YEAR_NEW + ':', b.tNew.rf.explain().get('outOfBagErrorEstimate'));
 
   Map.centerObject(region, 12);
   Map.addLayer(tilesFor(YEAR_OLD).mosaic(), rgb, 'VIEW ' + YEAR_OLD, false);
-  Map.addLayer(tilesFor(YEAR_NEW).mosaic(), rgb, 'VIEW ' + YEAR_NEW, false);
+  Map.addLayer(tilesFor(YEAR_NEW).mosaic(), rgb, 'VIEW ' + YEAR_NEW, true);
   Map.addLayer(ee.Image().paint(region, 0, 2), {palette: ['yellow']}, 'Study area');
-  Map.addLayer(b.out.select('imp2023').selfMask(), {palette: ['404040']}, 'Impervious ' + YEAR_NEW, false);
-  // Zoom to ~16+ before turning this on; the patch cleanup is computed at 1 m.
-  Map.addLayer(b.out.select('new').selfMask(), {palette: ['ff0000']}, 'New impervious (zoom in)', false);
-  Map.addLayer(training.filter(ee.Filter.eq('class', 1)), {color: 'red'}, 'Training: impervious', false);
-  Map.addLayer(training.filter(ee.Filter.eq('class', 0)), {color: 'green'}, 'Training: pervious', false);
+  // Slow, live classifier layers. Zoom to ~16+ before turning on.
+  Map.addLayer(b.out.select('cls2023'), CLASS_VIS, 'Classes ' + YEAR_NEW + ' (slow)', false);
+  Map.addLayer(b.out.select('cls2013'), CLASS_VIS, 'Classes ' + YEAR_OLD + ' (slow)', false);
+  Map.addLayer(b.out.select('new').selfMask(), {palette: ['ff0000']}, 'New impervious (slow)', false);
+  Map.addLayer(b.out.select('newBare').selfMask(), {palette: ['ff9900']}, 'New bare (slow)', false);
+
+  if (SHOW_DIAGNOSTICS) {
+    var t23 = tileInfo(YEAR_NEW);
+    var april = t23.filter(ee.Filter.eq('date', '2023-04-15'));
+    print('Training points inside April 2023 tiles, by class:',
+          training23.filterBounds(april.geometry()).aggregate_histogram('class'));
+    addStatic(april.select(['date']), {color: 'ff00ff', fillColor: 'ff00ff22'},
+              '2023 April tiles (magenta)', false);
+
+    var wrong13 = cvWrong(prep(YEAR_OLD), training13, '2013');
+    var wrong23 = cvWrong(prep(YEAR_NEW), training23, '2023');
+    addStatic(wrong13.select(['class', 'pred']), {color: 'ffff00'}, 'Misclassified 2013 (yellow)', true);
+    addStatic(wrong23.select(['class', 'pred']), {color: 'ff00ff'}, 'Misclassified 2023 (magenta)', true);
+    // The error that matters most: not-impervious called impervious.
+    addStatic(wrong23.filter(ee.Filter.and(ee.Filter.neq('class', 1), ee.Filter.eq('pred', 1)))
+                .select(['class', 'pred']),
+              {color: 'ff8800'}, '2023 veg/bare called impervious (orange)', true);
+  }
 }
 
 // ============================================================
-// MODE: EXPORT - writes the change map to an Asset (Tasks tab -> Run)
-// Bands: imp2013, imp2023 (1 = impervious), shadow (1 = masked), new (1 = new impervious)
+// MODE: VIEW
+// ============================================================
+if (MODE === 'VIEW') {
+  var cv_ = ee.Image(CHANGE_ASSET);
+  Map.centerObject(region, 12);
+  Map.addLayer(tilesFor(YEAR_OLD).mosaic(), rgb, 'VIEW ' + YEAR_OLD, false);
+  Map.addLayer(tilesFor(YEAR_NEW).mosaic(), rgb, 'VIEW ' + YEAR_NEW, true);
+  Map.addLayer(ee.Image().paint(region, 0, 2), {palette: ['yellow']}, 'Study area');
+  Map.addLayer(cv_.select('cls2023'), CLASS_VIS, 'Classes ' + YEAR_NEW, false);
+  Map.addLayer(cv_.select('cls2013'), CLASS_VIS, 'Classes ' + YEAR_OLD, false);
+  Map.addLayer(cv_.select('shadow').selfMask(), {palette: ['aa00ff']}, 'Shadow mask (purple)', false);
+  Map.addLayer(cv_.select('newBare').selfMask(), {palette: ['ff9900']}, 'New bare/cleared (orange)', false);
+  Map.addLayer(cv_.select('new').selfMask(), {palette: ['ff0000']}, 'New impervious (red)', true);
+}
+
+// ============================================================
+// MODE: EXPORT
+// Bands: imp2013, imp2023, shadow, new, newBare, cls2013, cls2023
 // ============================================================
 if (MODE === 'EXPORT') {
   var bx = buildChange();
   Export.image.toAsset({
     image: bx.out,
-    description: 'naip_change_west_2013_2023',
+    description: 'naip_change_west_2013_2023_v3',
     assetId: CHANGE_ASSET,
     region: region,
     crs: CRS,
     scale: 1,
     maxPixels: 1e11,
-    pyramidingPolicy: {'.default': 'mode'}   // categorical bands: never average
+    pyramidingPolicy: {'.default': 'mode'}
   });
-  print('Go to the Tasks tab and click RUN on naip_change_west_2013_2023.');
+  print('Tasks tab: RUN naip_change_west_2013_2023_v3.');
 }
 
 // ============================================================
-// MODE: SAMPLE - mask, area stats, stratified accuracy sample
-// Everything is computed from the exported asset, so it doesn't change between runs.
+// MODE: EVAL - score v3 against the existing labeled points
 // ============================================================
-if (MODE === 'SAMPLE') {
+if (MODE === 'EVAL') {
   var ch = ee.Image(CHANGE_ASSET);
-  var tk = tidalKeep();
-  var keep = tk.keep;
-  var newB = ch.select('new');
+  var ap = ee.FeatureCollection(SAMPLE_ASSET);
 
-  // "Near mapped new": any new pixel in a 30 m cell, grown by one cell (~30-60 m)
-  var near = newB.reduceResolution({reducer: ee.Reducer.max(), maxPixels: 1024})
-    .reproject({crs: CRS, scale: 30})
-    .focalMax({radius: 1, kernelType: 'square', units: 'pixels'})
-    .reproject({crs: CRS, scale: 30});
+  var vals = ch.select(['new', 'newBare', 'cls2013', 'cls2023']).sampleRegions({
+    collection: ap, properties: ['id'], scale: 1, projection: CRS
+  });
+  Export.table.toDrive({
+    collection: vals, description: 'eval_v3_west', fileFormat: 'CSV',
+    selectors: ['id', 'new', 'newBare', 'cls2013', 'cls2023']
+  });
 
-  var valid = newB.mask().and(keep).and(ch.select('shadow').eq(0));
-  var stratum = ee.Image(4).toByte()
-    .where(near.eq(1), 3)
-    .where(ch.select('imp2023').eq(1), 2)
-    .where(newB.eq(1), 1)
-    .updateMask(valid)
-    .rename('stratum');
-
-  // --- Area statistics (1 m pixels, so pixel counts = m2) ---
-  var hist = ee.Dictionary(stratum.reduceRegion({
-    reducer: ee.Reducer.frequencyHistogram(), geometry: region,
-    crs: CRS, scale: 1, maxPixels: 1e11, tileScale: 4
-  }).get('stratum'));
-
+  var keep = tidalKeep().keep;
+  var ok = ch.select('shadow').eq(0).and(keep);
   var sums = ee.Image.cat([
-    newB.eq(1).and(keep).rename('new_m2'),
-    newB.eq(1).and(keep.not()).rename('new_inside_tidal_mask_m2'),   // check: should be small
-    ch.select('shadow').eq(1).and(keep).rename('shadow_m2'),
-    keep.not().rename('tidal_masked_m2')
+    ch.select('new').eq(1).and(ok).rename('new_m2'),
+    ch.select('newBare').eq(1).and(ok).rename('newbare_m2')
   ]).reduceRegion({
     reducer: ee.Reducer.sum(), geometry: region,
     crs: CRS, scale: 1, maxPixels: 1e11, tileScale: 4
   });
-
   var stableGeom = ee.FeatureCollection(stable).filterBounds(region).geometry();
-  var stableFalse = newB.reduceRegion({
+  var stableFalse = ch.select('new').reduceRegion({
     reducer: ee.Reducer.mean(), geometry: stableGeom,
     crs: CRS, scale: 1, maxPixels: 1e10
   }).get('new');
-
-  var statsFeat = ee.Feature(null, {
-    study_area_m2: region.area(1),
-    s1_m2: hist.get('1', 0), s2_m2: hist.get('2', 0),
-    s3_m2: hist.get('3', 0), s4_m2: hist.get('4', 0),
-    stable_false_new_share: stableFalse
-  }).set(sums);
-
   Export.table.toDrive({
-    collection: ee.FeatureCollection([statsFeat]),
-    description: 'stats_west_2013_2023',
-    fileFormat: 'CSV',
-    selectors: ['study_area_m2', 's1_m2', 's2_m2', 's3_m2', 's4_m2', 'new_m2',
-                'new_inside_tidal_mask_m2', 'shadow_m2', 'tidal_masked_m2',
-                'stable_false_new_share']
+    collection: ee.FeatureCollection([ee.Feature(null, sums)
+      .set('stable_false_new_share', stableFalse)]),
+    description: 'stats_v3_west', fileFormat: 'CSV',
+    selectors: ['new_m2', 'newbare_m2', 'stable_false_new_share']
   });
 
-  // --- Stratified random sample ---
-  var pts = stratum.stratifiedSample({
-    numPoints: 0, classBand: 'stratum', region: region,
-    classValues: [1, 2, 3, 4], classPoints: SAMPLE_SIZES,
-    scale: 1, projection: CRS, seed: SEED, geometries: true,
-    tileScale: 4, dropNulls: true
-  });
-
-  // Shuffle so you label in random order, then number 0..N-1
-  pts = pts.randomColumn('r', SEED).sort('r');
-  var ptsList = pts.toList(2000);
-  var withId = ee.FeatureCollection(
-    ee.List.sequence(0, ptsList.size().subtract(1)).map(function (i) {
-      var f = ee.Feature(ptsList.get(i));
-      var ll = f.geometry().transform('EPSG:4326', 1).coordinates();
-      return f.set({id: ee.Number(i).int(), lon: ll.get(0), lat: ll.get(1),
-                    label: '', notes: ''})
-              .select(['id', 'stratum', 'lon', 'lat', 'label', 'notes']);
-    }));
-
-  Export.table.toAsset({
-    collection: withId, description: 'accuracy_points_west', assetId: SAMPLE_ASSET
-  });
-  // Labeling sheet WITHOUT the stratum, so you label blind
-  Export.table.toDrive({
-    collection: withId, description: 'labels_west', fileFormat: 'CSV',
-    selectors: ['id', 'lon', 'lat', 'label', 'notes']
-  });
-  // Key file (id -> stratum). Don't open this until labeling is done.
-  Export.table.toDrive({
-    collection: withId, description: 'key_west', fileFormat: 'CSV',
-    selectors: ['id', 'stratum']
-  });
-
-  print('Tasks tab: run stats_west_2013_2023, accuracy_points_west, labels_west, key_west.');
-
+  print('Tasks tab: run eval_v3_west and stats_v3_west.');
   Map.centerObject(region, 12);
-  Map.addLayer(ee.Image().paint(region, 0, 2), {palette: ['yellow']}, 'Study area');
-  if (tk.tidal) Map.addLayer(tk.tidal, {color: '00ffff'}, 'Tidal mask (NWI)', false);
-  Map.addLayer(newB.selfMask(), {palette: ['ff0000']}, 'New impervious', false);
-  Map.addLayer(stratum, {min: 1, max: 4, palette: ['ff0000', '404040', 'ffaa00', 'cccccc']},
-              'Strata (zoom in)', false);
+  Map.addLayer(ch.select('new').selfMask(), {palette: ['ff0000']}, 'New impervious v3', false);
 }
 
 // ============================================================
-// MODE: LABEL - step through accuracy points, 2013 left / 2023 right
-// Record labels in the labels_west CSV (open it in Google Sheets):
-//   1 = truly NEW impervious at the ring center (impervious in 2023, not in 2013)
-//   0 = not new (pervious in 2023, or already impervious in 2013)
-//   U = can't tell (record why in notes)
-// The change map is deliberately NOT shown, so you judge only from the photos.
+// MODE: LABEL - unchanged 2013 / 2023 viewer for the accuracy points
 // ============================================================
 if (MODE === 'LABEL') {
-  var ap = ee.FeatureCollection(SAMPLE_ASSET);
+  var apL = ee.FeatureCollection(SAMPLE_ASSET);
   var viewOld = tilesFor(YEAR_OLD).mosaic();
   var viewNew = tilesFor(YEAR_NEW).mosaic();
 
@@ -328,9 +320,8 @@ if (MODE === 'LABEL') {
     if (map.layers().length() > 1) map.layers().set(1, layer);
     else map.layers().add(layer);
   }
-
   function show() {
-    var f = ee.Feature(ap.filter(ee.Filter.eq('id', idx)).first());
+    var f = ee.Feature(apL.filter(ee.Filter.eq('id', idx)).first());
     var ring = ee.Image().byte().paint(
       ee.FeatureCollection([ee.Feature(f.geometry().buffer(2.5))]), 1, 2);
     setRing(leftMap, ui.Map.Layer(ring, {palette: ['ffff00']}, 'point'));
@@ -341,7 +332,6 @@ if (MODE === 'LABEL') {
                     '  (' + d.lat.toFixed(6) + ', ' + d.lon.toFixed(6) + ')');
     });
   }
-
   var prevBtn = ui.Button('< Prev', function () { if (idx > 0) { idx--; show(); } });
   var nextBtn = ui.Button('Next >', function () {
     if (total === null || idx < total - 1) { idx++; show(); }
@@ -350,14 +340,15 @@ if (MODE === 'LABEL') {
     var n = parseInt(v, 10);
     if (!isNaN(n) && n >= 0 && (total === null || n < total)) { idx = n; show(); }
   }});
-
   leftMap.add(ui.Panel(
     [info, ui.Panel([prevBtn, nextBtn], ui.Panel.Layout.flow('horizontal')), jump],
     null, {position: 'top-left', width: '260px'}));
-
-  ap.size().evaluate(function (n) { total = n; show(); });
+  apL.size().evaluate(function (n) { total = n; show(); });
 }
 
+// ============================================================
+// Helpers
+// ============================================================
 function tileInfo(year) {
   var list = tilesFor(year).toList(100);
   return ee.FeatureCollection(list.map(function (img) {
@@ -369,46 +360,26 @@ function tileInfo(year) {
     });
   }));
 }
-var t13 = tileInfo(YEAR_OLD);
-var t23 = tileInfo(YEAR_NEW);
-var april = t23.filter(ee.Filter.eq('date', '2023-04-15'));
 
-print('2023 April area (km2):', april.aggregate_sum('km2'));
-print('Training points inside April tiles, by class:',
-      training.filterBounds(april.geometry()).aggregate_histogram('class'));
-
-Map.addLayer(april.style({color: 'ff00ff', fillColor: 'ff00ff22'}),
-             {}, '2023 April tiles (magenta)');
-Map.addLayer(t13.filter(ee.Filter.eq('date', '2013-09-21'))
-               .style({color: '00ffff', fillColor: '00000000'}),
-             {}, '2013 Sept tiles (cyan)', false);
-
-if (MODE === 'CHECK') {
-  function cvWrong(img, label) {
-    var s = img.sampleRegions({collection: training, properties: ['class'],
-                               scale: 1, projection: CRS, geometries: true})
-               .randomColumn('r', 7);
-    var parts = ee.List.sequence(0, 4).map(function (k) {
-      k = ee.Number(k);
-      var lo = k.multiply(0.2), hi = k.add(1).multiply(0.2);
-      var test = s.filter(ee.Filter.and(ee.Filter.gte('r', lo), ee.Filter.lt('r', hi)));
-      var train = s.filter(ee.Filter.or(ee.Filter.lt('r', lo), ee.Filter.gte('r', hi)));
-      var rf = ee.Classifier.smileRandomForest(100)
-        .train(train, 'class', img.bandNames());
-      return test.classify(rf, 'pred');
-    });
-    var cv = ee.FeatureCollection(parts).flatten();
-    print(label + ' confusion matrix (rows = truth 0/1, cols = predicted 0/1):',
-          cv.errorMatrix('class', 'pred').array());
-    var wrong = cv.filter(ee.Filter.neq('class', ee.Feature(null).get('x'))) ;
-    return cv.map(function (f) {
-      return f.set('wrong', ee.Number(f.get('class')).neq(ee.Number(f.get('pred'))));
-    }).filter(ee.Filter.eq('wrong', 1));
-  }
-  var wrong13 = cvWrong(prep(YEAR_OLD), '2013');
-  var wrong23 = cvWrong(prep(YEAR_NEW), '2023');
-  print('2023 wrong points inside April tiles:',
-        wrong23.filterBounds(april.geometry()).size(), 'of', wrong23.size());
-  Map.addLayer(wrong13, {color: 'ffff00'}, 'Misclassified 2013 (yellow)');
-  Map.addLayer(wrong23, {color: 'ff00ff'}, 'Misclassified 2023 (magenta)');
+// 5-fold cross-validation for one year. Prints a 3 x 3 confusion matrix
+// (rows = truth 0/1/2, columns = predicted 0/1/2) and returns the wrong points.
+function cvWrong(img, coll, label) {
+  var s = img.sampleRegions({collection: coll, properties: ['class'],
+                             scale: 1, projection: CRS, geometries: true})
+             .randomColumn('r', 7);
+  var parts = ee.List.sequence(0, 4).map(function (k) {
+    k = ee.Number(k);
+    var lo = k.multiply(0.2), hi = k.add(1).multiply(0.2);
+    var test = s.filter(ee.Filter.and(ee.Filter.gte('r', lo), ee.Filter.lt('r', hi)));
+    var train = s.filter(ee.Filter.or(ee.Filter.lt('r', lo), ee.Filter.gte('r', hi)));
+    var rf = ee.Classifier.smileRandomForest(100)
+      .train(train, 'class', img.bandNames());
+    return test.classify(rf, 'pred');
+  });
+  var cv = ee.FeatureCollection(parts).flatten();
+  print(label + ' confusion matrix (rows = truth 0 veg / 1 imp / 2 bare, cols = predicted):',
+        cv.errorMatrix('class', 'pred', [0, 1, 2]).array());
+  return cv.map(function (f) {
+    return f.set('wrong', ee.Number(f.get('class')).neq(ee.Number(f.get('pred'))));
+  }).filter(ee.Filter.eq('wrong', 1));
 }
